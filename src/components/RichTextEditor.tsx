@@ -9,7 +9,7 @@ import {
   Send,
 } from "lucide-react";
 import Placeholder from "@tiptap/extension-placeholder";
-import { Markdown } from "tiptap-markdown";
+import React from "react";
 
 interface RichTextEditorProps {
   value: string;
@@ -55,32 +55,17 @@ export function RichTextEditor({
         emptyEditorClass:
           "cursor-text before:content-[attr(data-placeholder)] before:absolute before:opacity-70 before:pointer-events-none before:text-gray-300",
       }),
-      Markdown.configure({
-        html: false,
-        transformPastedText: true,
-        transformCopiedText: true,
-      }),
     ],
     content: value,
     editable: !disabled,
     onUpdate: ({ editor }) => {
-      try {
-        // Get the markdown content from the editor
-        const markdown = editor.storage.markdown?.getMarkdown();
-        if (markdown !== undefined) {
-          onChange(markdown);
-        } else {
-          // Fallback to plain text if markdown storage is not available
-          onChange(editor.getText());
-        }
-      } catch (error) {
-        console.error("Error getting markdown content:", error);
-        // Fallback to plain text if there's an error
-        onChange(editor.getText());
+      const text = editor.getText();
+      if (text !== value) {
+        onChange(text);
       }
     },
     editorProps: {
-      handleKeyDown: (view, event) => {
+      handleKeyDown: (_, event) => {
         // Prevent Enter from submitting
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
@@ -91,19 +76,28 @@ export function RichTextEditor({
     },
   });
 
+  // Update editor content when value prop changes
+  React.useEffect(() => {
+    if (editor && value !== editor.getText()) {
+      editor.commands.setContent(value);
+      // Focus the editor after content update
+      editor.commands.focus();
+    }
+  }, [value, editor]);
+
   if (!editor) {
     return null;
   }
 
   const handleSubmit = () => {
     if (onSubmit) {
-      // Get the final markdown content before submitting
-      const markdown =
-        editor.storage.markdown?.getMarkdown() || editor.getText();
-      onChange(markdown); // Ensure the latest markdown content is passed to parent
+      const currentText = editor.getText();
+      onChange(currentText);
       onSubmit();
-      // Clear the editor content after submitting
+      // Reset the editor content after submitting
       editor.commands.setContent("");
+      // Ensure the editor is focused after clearing
+      editor.commands.focus();
     }
   };
 

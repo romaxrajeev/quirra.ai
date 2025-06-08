@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { RichTextEditor } from "./RichTextEditor";
 import { Navbar } from "./Navbar";
 import { useTheme } from "@/context/ThemeContext";
+import OpenAI from "openai";
+import { Loader2, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -16,7 +16,7 @@ interface Question {
 }
 
 interface Answer {
-  questionId: string;
+  question: string;
   answer: string;
 }
 
@@ -110,6 +110,60 @@ const initialMessage: Message = {
     "👋 Hi! I'm Quirra, your Product Management assistant. I'll help you create comprehensive user stories and PRDs (Product Requirements Documents) by asking you a series of targeted questions. This will help us gather all the necessary information to create a well-structured document. Let's start with your product idea or feature - what would you like to work on?",
 };
 
+const formatQnA = (answers: Answer[]): string => {
+  return answers.map((qa) => `Q: ${qa.question}\nA: ${qa.answer}`).join("\n\n");
+};
+
+const generatePrompt = (answers: Answer[]): string => {
+  const qnaSection = formatQnA(answers);
+  const investPrompt = `
+You are a product requirements assistant. You will be given a set of answers from a user who filled out a structured feature intake form. Use this information to generate a high-quality Agile user story that follows the INVEST principle (Independent, Negotiable, Valuable, Estimable, Small, Testable).
+
+Using the inputs, generate a clear and concise user story in the following format:
+
+---
+**Title:** [Feature Title]
+
+**User Story:**
+As a [primary user or role], I want to [objective/goal], so that [value or benefit].
+
+**High-Level Flow:**
+[Summarized user flow based on steps]
+
+**Acceptance Criteria:**  
+- Based on the "Given-When-Then" scenarios and validations provided  
+- Include expected success and error behaviors  
+- Must be testable
+
+**Validations and Rules:**  
+- List key rules for inputs and fields (required, type, min/max, default values, etc.)
+
+**Authorization Rules:**  
+- Who is allowed or restricted from using this feature
+
+**Edge Cases:**  
+- Mention specific edge cases and how the system should behave
+
+**API Endpoint (if any):**  
+- [Method and URL]  
+- Expected success and error responses
+
+**Dependencies or Limitations:**  
+- Any blockers, dependencies, or related notes
+
+**Priority and Business Impact:**  
+- Tie to business goals or metrics if mentioned
+
+---
+
+Make sure the final output is suitable for both developers and QA engineers to estimate, develop, and test accurately. Keep it clear, structured, and complete. Here is the list of questions and answers:
+
+${qnaSection}
+`.trim();
+
+  return investPrompt;
+};
+
 export function Chat() {
   const { theme } = useTheme();
   const [messages, setMessages] = useState<Message[]>([initialMessage]);
@@ -118,6 +172,20 @@ export function Chat() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(-1);
   const [answers, setAnswers] = useState<Answer[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [lastMarkdown, setLastMarkdown] = useState<string>("");
+
+  const openai = new OpenAI({
+    apiKey: import.meta.env.VITE_OPENAI_API_KEY,
+    dangerouslyAllowBrowser: true,
+  });
+
+  // Start with the first question
+  useEffect(() => {
+    if (currentQuestionIndex === -1) {
+      askNextQuestion();
+    }
+  }, []);
 
   useEffect(() => {
     console.log(answers);
@@ -129,6 +197,11 @@ export function Chat() {
 
   useEffect(() => {
     scrollToBottom();
+  }, [messages]);
+
+  // Focus input after each message
+  useEffect(() => {
+    inputRef.current?.focus();
   }, [messages]);
 
   const askNextQuestion = () => {
@@ -151,80 +224,53 @@ export function Chat() {
     const trimmedInput = input.trim();
     if (!trimmedInput || isLoading) return;
 
-    // Create user message with markdown content
+    // Create user message
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
-    setInput("");
+    setInput(""); // Clear input immediately
     setIsLoading(true);
 
-    // Store the answer with the markdown content
+    // Store the answer
     if (currentQuestionIndex >= 0) {
       const currentAnswer = {
-        questionId: questions[currentQuestionIndex].id,
-        answer: input, // This is markdown content from RichTextEditor
+        question: questions[currentQuestionIndex].text,
+        answer: input,
       };
       setAnswers((prev) => [...prev, currentAnswer]);
 
       try {
         // Only make the API call if we've answered all questions
         if (currentQuestionIndex === questions.length - 1) {
-          const response = await fetch("/api/chat", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              messages: [...messages, userMessage],
-              answers: [...answers, currentAnswer],
-            }),
+          const prompt = generatePrompt([...answers, currentAnswer]);
+
+          const response = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a Product Management expert who creates detailed and well-structured PRDs.",
+              },
+              {
+                role: "user",
+                content: prompt,
+              },
+            ],
           });
 
-          if (!response.ok) throw new Error("Failed to get response");
-
-          // Add an empty assistant message that we'll update with streaming content
-          setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-
-          const reader = response.body?.getReader();
-          const decoder = new TextDecoder();
-
-          if (!reader) throw new Error("No reader available");
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value);
-            const lines = chunk
-              .split("\n")
-              .filter((line) => line.trim() !== "");
-
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
-                const data = line.slice(6);
-                if (data === "[DONE]") break;
-
-                try {
-                  const parsed = JSON.parse(data);
-                  const content = parsed.content;
-                  if (content) {
-                    setMessages((prev) => {
-                      const newMessages = [...prev];
-                      const lastMessage = newMessages[newMessages.length - 1];
-                      if (lastMessage.role === "assistant") {
-                        lastMessage.content += content;
-                      }
-                      return newMessages;
-                    });
-                  }
-                } catch (e) {
-                  console.error("Error parsing JSON:", e);
-                }
-              }
-            }
-          }
+          const assistantMessage =
+            response.choices[0]?.message?.content ||
+            "Sorry, I couldn't generate a response.";
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: assistantMessage },
+          ]);
+          setLastMarkdown(assistantMessage);
         } else {
           // If not all questions are answered, just ask the next question
-          askNextQuestion();
+          setTimeout(() => {
+            askNextQuestion();
+          }, 500); // Add a small delay to make the conversation feel more natural
         }
       } catch (error) {
         console.error("Error:", error);
@@ -241,15 +287,10 @@ export function Chat() {
     }
   };
 
-  const markdownComponents: Components = {
-    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-    ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
-    ol: ({ children }) => (
-      <ol className="list-decimal pl-4 mb-2">{children}</ol>
-    ),
-    li: ({ children }) => <li className="mb-1">{children}</li>,
-    strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-    em: ({ children }) => <em className="italic">{children}</em>,
+  const handleCopyMarkdown = () => {
+    if (lastMarkdown) {
+      navigator.clipboard.writeText(lastMarkdown);
+    }
   };
 
   return (
@@ -276,11 +317,24 @@ export function Chat() {
                   : "bg-gray-100 text-gray-900"
               }`}
             >
-              <div className="prose prose-invert max-w-none">
-                <ReactMarkdown components={markdownComponents}>
-                  {message.content}
-                </ReactMarkdown>
-              </div>
+              {index === messages.length - 1 &&
+              message.role === "assistant" &&
+              currentQuestionIndex === questions.length - 1 ? (
+                <div className="relative">
+                  <button
+                    onClick={handleCopyMarkdown}
+                    className="absolute top-2 right-2 p-2 rounded-lg hover:bg-gray-700 transition-colors"
+                    title="Copy markdown"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+                  <div className="prose prose-invert max-w-none">
+                    <ReactMarkdown>{message.content}</ReactMarkdown>
+                  </div>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap">{message.content}</div>
+              )}
             </div>
           </div>
         ))}
@@ -295,14 +349,38 @@ export function Chat() {
             : "border-gray-200 bg-white"
         }`}
       >
-        <div className="flex flex-col space-y-4">
-          <RichTextEditor
+        <div className="flex space-x-4">
+          <input
+            ref={inputRef}
+            type="text"
             value={input}
-            onChange={setInput}
-            placeholder="Type your response here... You can use bold, italic, underline, and bullet points to format your text."
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Type your response here..."
             disabled={isLoading}
-            onSubmit={handleSubmit}
+            className={`flex-1 px-4 py-2 rounded-lg border ${
+              theme === "dark"
+                ? "bg-gray-800 border-gray-700 text-white placeholder-gray-400"
+                : "bg-white border-gray-300 text-gray-900 placeholder-gray-500"
+            } focus:outline-none focus:ring-2 focus:ring-blue-500`}
           />
+          <button
+            type="submit"
+            disabled={isLoading || !input.trim()}
+            className={`px-4 py-2 rounded-lg bg-blue-600 text-white font-medium flex items-center space-x-2 ${
+              isLoading || !input.trim()
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:bg-blue-700"
+            }`}
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Loading...</span>
+              </>
+            ) : (
+              <span>Send</span>
+            )}
+          </button>
         </div>
       </form>
     </div>
