@@ -42,7 +42,7 @@ Quirra is an intelligent web application that helps product managers and teams c
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/quirra.git
+git clone https://github.com/romaxrajeev/quirra.ai.git
 cd quirra
 ```
 
