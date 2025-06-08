@@ -17,10 +17,6 @@ export function ApiKeyModal({ isOpen, onSubmit }: ApiKeyModalProps) {
       setError("API key must start with 'sk-'");
       return false;
     }
-    if (key.length < 40 || key.length > 60) {
-      setError("Invalid API key length");
-      return false;
-    }
     return true;
   };
 
