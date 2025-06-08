@@ -4,6 +4,7 @@ import { useTheme } from "@/context/ThemeContext";
 import OpenAI from "openai";
 import { Loader2, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { ApiKeyModal } from "./ApiKeyModal";
 
 interface Message {
   role: "user" | "assistant";
@@ -174,11 +175,20 @@ export function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [lastMarkdown, setLastMarkdown] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [showApiKeyModal, setShowApiKeyModal] = useState(true);
 
-  const openai = new OpenAI({
-    apiKey: import.meta.env.VITE_OPENAI_API_KEY,
-    dangerouslyAllowBrowser: true,
-  });
+  const openai = apiKey
+    ? new OpenAI({
+        apiKey,
+        dangerouslyAllowBrowser: true,
+      })
+    : null;
+
+  const handleApiKeySubmit = (key: string) => {
+    setApiKey(key);
+    setShowApiKeyModal(false);
+  };
 
   // Start with the first question
   useEffect(() => {
@@ -224,6 +234,12 @@ export function Chat() {
     const trimmedInput = input.trim();
     if (!trimmedInput || isLoading) return;
 
+    // Check if API key is set
+    if (!apiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
+
     // Create user message
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
@@ -243,7 +259,7 @@ export function Chat() {
         if (currentQuestionIndex === questions.length - 1) {
           const prompt = generatePrompt([...answers, currentAnswer]);
 
-          const response = await openai.chat.completions.create({
+          const response = await openai?.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
               {
@@ -259,7 +275,7 @@ export function Chat() {
           });
 
           const assistantMessage =
-            response.choices[0]?.message?.content ||
+            response?.choices[0]?.message?.content ||
             "Sorry, I couldn't generate a response.";
           setMessages((prev) => [
             ...prev,
@@ -300,6 +316,7 @@ export function Chat() {
       }`}
     >
       <Navbar />
+      <ApiKeyModal isOpen={showApiKeyModal} onSubmit={handleApiKeySubmit} />
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (
           <div
